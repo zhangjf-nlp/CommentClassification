@@ -3,7 +3,7 @@ The homework of ML-2021-BUAA. A project for multi-label text label regression.
 
 ## Step 0. setup environment
 ```
-pip install requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Step 1. prepare data
