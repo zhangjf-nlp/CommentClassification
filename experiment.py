@@ -1,7 +1,6 @@
 from cuda_utils import dynamic_cuda_allocation
 from cuda_utils import block_until_cuda_memory_free
 dynamic_cuda_allocation()
-block_until_cuda_memory_free(required_mem=1000)
 
 import os
 import sys
@@ -10,11 +9,16 @@ import torch
 import argparse
 import numpy as np
 from tqdm import tqdm
-from transformers import BertTokenizer
+from copy import deepcopy
+
+from transformers import AdamW, get_cosine_schedule_with_warmup, get_constant_schedule
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from transformers import logging
 logging.set_verbosity_error()
 
-from data_utils import get_dataloader
+from transformers import AutoModel, AutoTokenizer
+
+from data_utils import get_dataloader, get_df, export_result
 
 def init_config(args_specification=None):
     parser = argparse.ArgumentParser(description="Comment Classification study")
@@ -25,7 +29,7 @@ def init_config(args_specification=None):
     
     parser.add_argument('--epoch', type=int, default=1)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--batch_size', type=int, default=100, help="the size of mini-batch in training")
+    parser.add_argument('--batch_size', type=int, default=32, help="the size of mini-batch in training")
     
     parser.add_argument('--seed', type=int, default=123456, help="random seed")
     parser.add_argument('--opt', type=str, choices=["adamw"], default="adamw", help="optimizer")
@@ -36,6 +40,8 @@ def init_config(args_specification=None):
     
     parser.add_argument('--exp_dir', type=str, default=None)
     parser.add_argument('--head_class', type=str, default="BasicRegressionHead")
+    parser.add_argument('--loss_class', type=str, choices=["mse", "ce"], default="mse")
+    parser.add_argument('--extra_counts', type=int, default=0, help="number of extra features for joint learning")
     
     if args_specification:
         args = parser.parse_args([_ for _ in args_specification if _])
@@ -53,7 +59,9 @@ def init_config(args_specification=None):
     assert args.head_class in available_head_classes, f"unknown head_class: {args.head_class}, available: {[_ for _ in available_head_classes.keys()]}"
     args.head_class = available_head_classes[args.head_class]
     
-    args.model_name = f"BERT_with_{args.head_class.__name__}"
+    args.model_name = f"{args.pretrained_model_name_or_path}_with_{args.head_class.__name__}_{args.loss_class}"
+    if args.extra_counts > 0:
+        args.model_name += f"+{args.extra_counts}"
     
     if args.exp_dir == None:
         args.exp_dir = f"exp/{args.model_name}"
@@ -73,7 +81,7 @@ def create_logging(args, erase=True):
                 logf.write(str(output) + end)
     
     if args.test:
-        return functools.partial(logging, log_path=None, do_print=False)
+        return functools.partial(logging, log_path=f"{args.exp_dir}/test_log.txt", do_print=True)
     
     if os.path.exists(args.exp_dir):
         if erase:
@@ -93,20 +101,26 @@ def create_logging(args, erase=True):
 
 def create_model(args):
     from modules.baseline import Model
+    if args.loss_class == "ce":
+        from modules.baseline import extend_with_celoss
+        args.head_class = extend_with_celoss(args.head_class)
+    if args.extra_counts > 0:
+        from modules.baseline import extend_with_extra_regressions
+        args.head_class = extend_with_extra_regressions(
+            args.head_class, args.extra_counts,
+            extra_weights=[1/args.extra_counts for _ in range(args.extra_counts)])
     model = Model(args)
     args.logging(model)
     return model.cuda()
 
 def create_dataloader(args):
-    train_dataloader = get_dataloader(usage="train", batch_size=args.batch_size)
-    eval_dataloader = get_dataloader(usage="eval", batch_size=args.batch_size)
+    train_dataloader = get_dataloader(args, usage="train")
+    eval_dataloader = get_dataloader(args, usage="eval")
     args.train_steps = len(train_dataloader) * args.epoch
     args.warmup_steps = int(args.train_steps / 10)
     return train_dataloader, eval_dataloader
     
 def create_optimizer_and_scheduler(args, model):
-    from transformers import AdamW, get_cosine_schedule_with_warmup, get_constant_schedule
-    from torch.optim.lr_scheduler import ReduceLROnPlateau
     parameters_to_optimize = [n for n in model.named_parameters()]
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -138,12 +152,12 @@ def train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, 
     model.train()
     dataloader, tbwriter = train_dataloader, train_tbwriter
     steps_per_epoch = len(dataloader) * 0.1 if args.tiny_experiment else len(dataloader)
-    training_logging_steps = int(steps_per_epoch / 20)
+    training_logging_steps = int(steps_per_epoch / 10)
     bar = tqdm(enumerate(dataloader), total=len(dataloader))
     for step, data_batch in bar:
-        text, target = data_batch
-        text, target = text.cuda(), target.cuda()
-        loss, pred = model(text, target)
+        text, target, extra = data_batch
+        text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
+        loss, pred = model(text, target, extra)
         bar.set_description(f"loss={loss.item():.2f}")
         for name, value in [
             ("loss", loss.item()),
@@ -169,65 +183,113 @@ def train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, 
     return
 
 @torch.no_grad()
-def eval_epoch(args, model, dataloader, tbwriter, scheduler):
+def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
     model.eval()
     
     total_loss, total_samples = 0, 0
-    bar = enumerate(dataloader)
+    all_pred, all_target = [], []
+    bar = enumerate(dataloader) if not args.test else enumerate(tqdm(dataloader))
     for step, data_batch in bar:
-        text, target = data_batch
-        text, target = text.cuda(), target.cuda()
-        loss, pred = model(text, target)
+        text, target, extra = data_batch
+        text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
+        loss, pred = model(text, target, extra)
         total_loss += loss
         total_samples += text.shape[0]
+        if args.test:
+            all_pred.append(pred.cpu().numpy())
+            all_target.append(target.cpu().numpy())
         
         if args.tiny_experiment and step > len(dataloader)*0.1:
+            print(f"text: {text}")
+            print(f"target: {target}")
+            print(f"loss: {loss}")
+            print(f"pred: {pred}")
+            print(f"total_loss: {total_loss}")
+            print(f"total_samples: {total_samples}")
             break
     
     eval_loss = total_loss / total_samples
-    args.logging(f"Eval -- {args.global_step}: ")
+    
+    if args.test:
+        from sklearn.metrics import roc_auc_score
+        all_target = np.concatenate(all_target, axis=0)
+        all_pred = np.concatenate(all_pred, axis=0)
+        torch.save((all_target,all_pred),f"{args.exp_dir}/target_pred.pt")
+        eval_roc_auc = roc_auc_score(all_target>0.5, all_pred)
+    
+    if not args.test:
+        args.logging(f"Eval -- {args.global_step}: ")
     for name, value in [
         ("loss", eval_loss),
+        ("roc_auc", eval_roc_auc if args.test else 0)
     ]:
-        tbwriter.add_scalar(name, value, args.global_step)
+        if tbwriter is not None:
+            tbwriter.add_scalar(name, value, args.global_step)
         args.logging(f"{name} = {value}")
     
-    if args.scheduler_style == "dynamic":
+    if scheduler is not None and args.scheduler_style == "dynamic":
         scheduler.step(eval_loss)
     
-    if eval_loss < args.best_eval_loss:
+    if not args.test and eval_loss < args.best_eval_loss:
         args.best_eval_loss = eval_loss
-        args.best_state_dict = model.state_dict()
-        args.logging(f"update best eval loss to: {eval_loss:.3f}\n")
+        args.best_state_dict = deepcopy(model.state_dict())
+        args.logging(f"update best eval loss to: {eval_loss:.6f}\n")
         
     model.train()
+
+@torch.no_grad()
+def get_submission(args, model):
+    dataloader = get_dataloader(usage="test", batch_size=args.batch_size)
+    all_pred = []
+    for step, data_batch in enumerate(tqdm(dataloader)):
+        text, target, extra = data_batch
+        text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
+        loss, pred = model(text, target, extra)
+        all_pred.append(pred.cpu().numpy())
+    all_pred = np.concatenate(all_pred, axis=0)
+    df_test = get_df(usage="test")
+    submission = "\n".join([f"{a} {b}" for a,b in zip(list(df_test["id"]), list(all_pred))])
+    with open(f"{args.exp_dir}/submission.txt", "w") as f:
+        f.write(submission)
 
 if __name__ == "__main__":
     
     args = init_config()
     
-    try:
-        args.logging(f"This experiemnt started at: {time.ctime()}")
+    if args.test:
+        block_until_cuda_memory_free(required_mem=3000)
+        args.logging(f"This test started at: {time.ctime()}")
         model = create_model(args)
+        model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
         train_dataloader, eval_dataloader = create_dataloader(args)
-        optimizer, scheduler = create_optimizer_and_scheduler(args, model)
-        train_tbwriter, eval_tbwriter = create_tbwriter(args)
-        args.logging(f"begin training")
-        args.best_state_dict = None
-        for epoch in range(args.epoch):
-            args.logging(f"epoch {epoch+1}/{args.epoch}")
-            train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, eval_tbwriter, optimizer, scheduler)
+        eval_epoch(args, model, eval_dataloader)
+        #export_result(args.exp_dir)
+        get_submission(args, model)
         
-        args.logging(f"finish training: best_loss = {args.best_eval_loss}\n")
-        
-        if args.best_state_dict is not None:
-            torch.save(args.best_state_dict, f"{args.exp_dir}/chkpts.pt")
-            model.load_state_dict(args.best_state_dict)
-        elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
-            model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
-        
-        # TODO test
-        
-    except Exception as e:
-        import traceback
-        args.logging(f'traceback.format_exc():\n{traceback.format_exc()}')
+    else:
+        try:
+            block_until_cuda_memory_free(required_mem=11000)
+            args.logging(f"This experiemnt started at: {time.ctime()}")
+            model = create_model(args)
+            train_dataloader, eval_dataloader = create_dataloader(args)
+            optimizer, scheduler = create_optimizer_and_scheduler(args, model)
+            train_tbwriter, eval_tbwriter = create_tbwriter(args)
+            args.logging(f"begin training")
+            args.best_state_dict = None
+            for epoch in range(args.epoch):
+                args.logging(f"epoch {epoch+1}/{args.epoch}")
+                train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, eval_tbwriter, optimizer, scheduler)
+
+            args.logging(f"finish training: best_loss = {args.best_eval_loss}\n")
+
+            if args.best_state_dict is not None:
+                torch.save(args.best_state_dict, f"{args.exp_dir}/chkpts.pt")
+                model.load_state_dict(args.best_state_dict)
+            elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
+                model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
+
+            # TODO test
+
+        except Exception as e:
+            import traceback
+            args.logging(f'traceback.format_exc():\n{traceback.format_exc()}')

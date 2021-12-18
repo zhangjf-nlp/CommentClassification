@@ -26,4 +26,4 @@ def block_until_cuda_memory_free(required_mem, interval=30):
         time.sleep(interval)
         available_mem = get_available_mem()
     blocked_time = str(datetime.timedelta(seconds=int(time.time()-start_time)))
-    print(f"{time.ctime()} \t {available_mem} MiB >= {required_mem} MiB : passed after {blocked_time}", end="\r")
+    print(f"{time.ctime()} \t {available_mem} MiB >= {required_mem} MiB : passed after {blocked_time}")

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from transformers import BertModel
+from transformers import AutoModel, AutoTokenizer
 
 Constants = {
     "PAD": 0,
@@ -55,13 +55,13 @@ class Model(nn.Module):
     """
     def __init__(self, args):
         super().__init__()
-        self.bert = BertModel.from_pretrained(args.pretrained_model_name_or_path)
+        self.bert = AutoModel.from_pretrained(args.pretrained_model_name_or_path)
         self.aggregator = Aggregator(
             input_size = self.bert.config.hidden_size
         )
         self.head = args.head_class(args, self.bert.config)
     
-    def forward(self, input_ids, label, padding_mask=None):
+    def forward(self, input_ids, label, extra_labels=None, padding_mask=None):
         batch_size, input_len = input_ids.shape
         if padding_mask is None:
             padding_mask = input_ids.ne(Constants["PAD"])
@@ -70,7 +70,7 @@ class Model(nn.Module):
         hidden_states = outputs.last_hidden_state
         last_hidden_state = outputs.pooler_output
         aggregation = self.aggregator(hidden_states, padding_mask)
-        loss, prediction = self.head(aggregation, label)
+        loss, prediction = self.head(aggregation, label, extra_labels)
         return loss, prediction
 
 class BasicRegressionHead(nn.Module):
@@ -81,14 +81,14 @@ class BasicRegressionHead(nn.Module):
             nn.Linear(bert_config.hidden_size, 1),
             nn.Sigmoid()
         )
-    def forward(self, aggregation, label):
-        pred = self.MLP(aggregation)
+    def forward(self, aggregation, label, extra_labels=None):
+        pred = self.MLP(aggregation).squeeze(-1)
         loss = F.mse_loss(pred, label)
         return loss, pred
 
 class TwoLayerRegressionHead(BasicRegressionHead):
     def __init__(self, args, bert_config):
-        super().__init__()
+        super().__init__(args, bert_config)
         self.MLP = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(bert_config.hidden_size, int(bert_config.hidden_size**0.5)),
@@ -97,4 +97,41 @@ class TwoLayerRegressionHead(BasicRegressionHead):
             nn.Sigmoid()
         )
 
-available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead]}
+class SimCLR_MLP(BasicRegressionHead):
+    def __init__(self, args, bert_config):
+        super().__init__(args, bert_config)
+        self.MLP = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(bert_config.hidden_size, int(bert_config.hidden_size**0.5)),
+            nn.BatchNorm1d(int(bert_config.hidden_size**0.5)),
+            nn.ReLU(),
+            nn.Linear(int(bert_config.hidden_size**0.5), 1),
+            nn.Sigmoid()
+        )
+
+def extend_with_celoss(BaseHead):
+    class CEBaseHead(BaseHead):
+        def forward(self, aggregation, label, extra_labels=None):
+            loss, pred = super(CEBaseHead, self).forward(aggregation, label)
+            loss = -torch.sum(label*torch.log(pred+1e-8) + (1-label)*torch.log(1-pred+1e-8))
+            return loss, pred
+    return CEBaseHead
+
+def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
+    class ExtraRegressionHead(BaseHead):
+        def __init__(self, args, bert_config):
+            super().__init__(args, bert_config)
+            self.extra_weights = torch.tensor(extra_weights).float().cuda()
+            self.extra_counts = extra_counts
+            self.extra_MLPs = nn.Sequential(
+                nn.Dropout(0.1),
+                nn.Linear(bert_config.hidden_size, extra_counts),
+                nn.Sigmoid()
+            )
+        def forward(self, aggregation, label, extra_labels):
+            loss, pred = super(ExtraRegressionHead, self).forward(aggregation, label)
+            loss_extra = torch.sum(F.mse_loss(self.extra_MLPs(aggregation), extra_labels) * self.extra_weights)
+            return loss + loss_extra, pred
+    return ExtraRegressionHead
+            
+available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead, SimCLR_MLP]}
