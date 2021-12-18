@@ -55,7 +55,7 @@ def get_df(root="./data/MLHomework_Toxicity", usage="train"):
 def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
     dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-(1+{extra_counts}).pt"
     if os.path.exists(dataset_file_path) and not erase:
-        dataset = torch.load(dataloader_file_path)
+        dataset = torch.load(dataset_file_path)
     else:
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
@@ -67,7 +67,7 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
             torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
             torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros(df.shape[0], len(extra_columns))).float(),
         )
-        torch.save(dataset, dataloader_file_path)
+        torch.save(dataset, dataset_file_path)
     dataloader = torch.utils.data.DataLoader(
         dataset = dataset,
         sampler = torch.utils.data.RandomSampler(dataset) if usage=="train" else torch.utils.data.SequentialSampler(dataset),

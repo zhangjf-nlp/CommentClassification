@@ -267,7 +267,7 @@ if __name__ == "__main__":
         
     else:
         try:
-            block_until_cuda_memory_free(required_mem=11000)
+            #block_until_cuda_memory_free(required_mem=11000)
             args.logging(f"This experiemnt started at: {time.ctime()}")
             model = create_model(args)
             train_dataloader, eval_dataloader = create_dataloader(args)
