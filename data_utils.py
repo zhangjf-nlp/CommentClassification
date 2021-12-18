@@ -52,17 +52,22 @@ columns_to_pearsons = [
 def get_df(root="./data/MLHomework_Toxicity", usage="train"):
     return pd.DataFrame(pd.read_csv(f"{root}/{usage}.csv"))
     
-def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6):
-    if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
-    df = get_df(root, usage)
-    extra_columns = [a for a,b in columns_to_pearsons[:extra_counts]]
-    dataset = torch.utils.data.TensorDataset(
-        torch.tensor([tokenizer.encode(text, truncation=True, max_length=MAX_LENGTH, padding="max_length")
-                      for text in tqdm(df["comment_text"])]).long(),
-        torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
-        torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros(df.shape[0], len(extra_columns))).float(),
-    )
+def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
+    dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-(1+{extra_counts}).pt"
+    if os.path.exists(dataset_file_path) and not erase:
+        dataset = torch.load(dataloader_file_path)
+    else:
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
+        df = get_df(root, usage)
+        extra_columns = [a for a,b in columns_to_pearsons[:extra_counts]]
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor([tokenizer.encode(text, truncation=True, max_length=MAX_LENGTH, padding="max_length")
+                          for text in tqdm(df["comment_text"])]).long(),
+            torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
+            torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros(df.shape[0], len(extra_columns))).float(),
+        )
+        torch.save(dataset, dataloader_file_path)
     dataloader = torch.utils.data.DataLoader(
         dataset = dataset,
         sampler = torch.utils.data.RandomSampler(dataset) if usage=="train" else torch.utils.data.SequentialSampler(dataset),

@@ -68,7 +68,7 @@ class Model(nn.Module):
         
         outputs = self.bert(input_ids)
         hidden_states = outputs.last_hidden_state
-        last_hidden_state = outputs.pooler_output
+        #last_hidden_state = outputs.pooler_output
         aggregation = self.aggregator(hidden_states, padding_mask)
         loss, prediction = self.head(aggregation, label, extra_labels)
         return loss, prediction
