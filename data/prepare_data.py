@@ -14,10 +14,10 @@ file_path = "MLHomework_Toxicity/train_origin.csv"
 file = pd.read_csv(file_path)
 df = pd.DataFrame(file)
 
-test_index = np.random.choice(range(df.shape[0]), int(df.shape[0] * 0.1), replace=False)
-df_test = df.loc[sorted(test_index)]
-df_test.to_csv("MLHomework_Toxicity/eval.csv")
+eval_index = np.random.choice(range(df.shape[0]), int(df.shape[0] * 0.1), replace=False)
+df_eval = df.loc[sorted(eval_index)]
+df_eval.to_csv("MLHomework_Toxicity/eval.csv")
 
-train_index = [i for i in range(df.shape[0]) if i not in test_index]
+train_index = [i for i in range(df.shape[0]) if i not in eval_index]
 df_train = df.loc[sorted(train_index)]
 df_train.to_csv("MLHomework_Toxicity/train.csv")
