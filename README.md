@@ -15,5 +15,10 @@ cd ..
 
 ## Step 2. run experiment
 ```
-python experiment.py [--head_class BasicRegreesionHead] [--loss_class mse] [--extra_counts 6]
+python3 experiment.py [--head_class BasicRegreesionHead] [--loss_class mse] [--extra_counts 6]
+```
+
+## Step 3. predict
+```
+python3 experiment.py [--head_class BasicRegreesionHead] [--loss_class mse] [--extra_counts 6] --test
 ```
