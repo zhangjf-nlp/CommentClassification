@@ -238,7 +238,7 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
 
 @torch.no_grad()
 def get_submission(args, model):
-    dataloader = get_dataloader(usage="test", batch_size=args.batch_size)
+    dataloader = get_dataloader(args, usage="test")
     all_pred = []
     for step, data_batch in enumerate(tqdm(dataloader)):
         text, target, extra = data_batch

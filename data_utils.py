@@ -65,7 +65,7 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
             torch.tensor([tokenizer.encode(text, truncation=True, max_length=MAX_LENGTH, padding="max_length")
                           for text in tqdm(df["comment_text"])]).long(),
             torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
-            torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros(df.shape[0], len(extra_columns))).float(),
+            torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros([df.shape[0], len(extra_columns)])).float(),
         )
         torch.save(dataset, dataset_file_path)
     dataloader = torch.utils.data.DataLoader(
