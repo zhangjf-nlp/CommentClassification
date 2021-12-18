@@ -11,13 +11,14 @@ import numpy as np
 from tqdm import tqdm
 from copy import deepcopy
 
+from transformers import AutoModel, AutoTokenizer
 from transformers import AdamW, get_cosine_schedule_with_warmup, get_constant_schedule
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from transformers import logging
 logging.set_verbosity_error()
 
-from transformers import AutoModel, AutoTokenizer
 
+from modules.baseline import available_head_classes
 from data_utils import get_dataloader, get_df, export_result
 
 def init_config(args_specification=None):
@@ -39,7 +40,7 @@ def init_config(args_specification=None):
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
     
     parser.add_argument('--exp_dir', type=str, default=None)
-    parser.add_argument('--head_class', type=str, default="BasicRegressionHead")
+    parser.add_argument('--head_class', type=str, choices=list(available_head_classes.keys()), default="BasicRegressionHead")
     parser.add_argument('--loss_class', type=str, choices=["mse", "ce"], default="mse")
     parser.add_argument('--extra_counts', type=int, default=0, help="number of extra features for joint learning")
     
@@ -55,8 +56,6 @@ def init_config(args_specification=None):
     torch.cuda.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     
-    from modules.baseline import available_head_classes
-    assert args.head_class in available_head_classes, f"unknown head_class: {args.head_class}, available: {[_ for _ in available_head_classes.keys()]}"
     args.head_class = available_head_classes[args.head_class]
     
     args.model_name = f"{args.pretrained_model_name_or_path}_with_{args.head_class.__name__}_{args.loss_class}"
