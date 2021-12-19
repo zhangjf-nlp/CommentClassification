@@ -77,7 +77,7 @@ class Model(nn.Module):
     
     def freeze_bert(self, reverse=False):
         for name,para in self.bert.named_parameters():
-            para.requires_grad = True if not reverse else False
+            para.requires_grad = False if not reverse else True
 
 class BasicRegressionHead(nn.Module):
     def __init__(self, args, bert_config):
@@ -140,6 +140,9 @@ def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
             )
         def forward(self, aggregation, label, extra_labels):
             loss, pred = super(ExtraRegressionHead, self).forward(aggregation, label)
+            if self.extra_counts == -1:
+                # transform from multi-task fine-tuning to single-task fine-tuning
+                return loss, pred
             loss_extra = torch.sum(F.mse_loss(self.extra_MLPs(aggregation), extra_labels) * self.extra_weights)
             return loss + loss_extra, pred
     return ExtraRegressionHead
