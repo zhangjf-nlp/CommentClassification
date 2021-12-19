@@ -6,6 +6,7 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 MAX_LENGTH = 200
+TRUNCATION_MEDIUM = 128
 
 columns_to_pearsons = [
     ('insult', 0.928228709),
@@ -67,6 +68,8 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
             torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
             torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros([df.shape[0], len(extra_columns)])).float(),
         )
+        if not os.path.exists(os.path.dirname(dataset_file_path)):
+            os.makedirs(os.path.dirname(dataset_file_path))
         torch.save(dataset, dataset_file_path)
     dataloader = torch.utils.data.DataLoader(
         dataset = dataset,
@@ -82,8 +85,8 @@ def get_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", token
         dataloader = torch.load(dataloader_file_path)
     else:
         dataloader = create_dataloader(args, root, usage, tokenizer)
-        if not os.path.exists(f"{root}/{args.pretrained_model_name_or_path}"):
-            os.makedirs(f"{root}/{args.pretrained_model_name_or_path}")
+        if not os.path.exists(os.path.dirname(dataloader_file_path)):
+            os.makedirs(os.path.dirname(dataloader_file_path))
         torch.save(dataloader, dataloader_file_path)
     return dataloader
 

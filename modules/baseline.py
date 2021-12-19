@@ -56,6 +56,8 @@ class Model(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.bert = AutoModel.from_pretrained(args.pretrained_model_name_or_path)
+        if args.freeze_pretrained:
+            self.freeze_bert()
         self.aggregator = Aggregator(
             input_size = self.bert.config.hidden_size
         )
@@ -72,6 +74,10 @@ class Model(nn.Module):
         aggregation = self.aggregator(hidden_states, padding_mask)
         loss, prediction = self.head(aggregation, label, extra_labels)
         return loss, prediction
+    
+    def freeze_bert(self, reverse=False):
+        for name,para in self.bert.named_parameters():
+            para.requires_grad = True if not reverse else False
 
 class BasicRegressionHead(nn.Module):
     def __init__(self, args, bert_config):
@@ -113,7 +119,11 @@ def extend_with_celoss(BaseHead):
     class CEBaseHead(BaseHead):
         def forward(self, aggregation, label, extra_labels=None):
             loss, pred = super(CEBaseHead, self).forward(aggregation, label)
-            loss = -torch.sum(label*torch.log(pred+1e-8) + (1-label)*torch.log(1-pred+1e-8))
+            label_ = label*0.8+0.1
+            pred_ = pred*0.8+0.1
+            # [0,1] -> [0.1,0.9]
+            loss = -torch.sum(label_*torch.log(pred_) + \
+                              (1-label_)*torch.log(1-pred_))
             return loss, pred
     return CEBaseHead
 

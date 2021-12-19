@@ -17,9 +17,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from transformers import logging
 logging.set_verbosity_error()
 
-
 from modules.baseline import available_head_classes
 from data_utils import get_dataloader, get_df, export_result
+
+TINY_RATE = 0.1
 
 def init_config(args_specification=None):
     parser = argparse.ArgumentParser(description="Comment Classification study")
@@ -34,12 +35,13 @@ def init_config(args_specification=None):
     
     parser.add_argument('--seed', type=int, default=123456, help="random seed")
     parser.add_argument('--opt', type=str, choices=["adamw"], default="adamw", help="optimizer")
-    parser.add_argument('--scheduler_style', type=str, choices=["dynamic", "static"], default="dynamic", help="scheduler")
+    parser.add_argument('--scheduler_style', type=str, choices=["dynamic", "static"], default="static", help="scheduler")
     parser.add_argument('--weight_decay', type=float, default=0.01, help="Weight deay if we apply some.")
     parser.add_argument('--adam_epsilon', type=float, default=1e-8, help="Epsilon for Adam optimizer.")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=4)
     
     parser.add_argument('--exp_dir', type=str, default=None)
+    parser.add_argument('--freeze_pretrained', action='store_true', default=False, help="freeze the pretrained weights")
     parser.add_argument('--head_class', type=str, choices=list(available_head_classes.keys()), default="BasicRegressionHead")
     parser.add_argument('--loss_class', type=str, choices=["mse", "ce"], default="mse")
     parser.add_argument('--extra_counts', type=int, default=0, help="number of extra features for joint learning")
@@ -116,6 +118,8 @@ def create_dataloader(args):
     train_dataloader = get_dataloader(args, usage="train")
     eval_dataloader = get_dataloader(args, usage="eval")
     args.train_steps = len(train_dataloader) * args.epoch
+    if args.tiny_experiment:
+        args.train_steps = int(args.train_steps / 10)
     args.warmup_steps = int(args.train_steps / 10)
     return train_dataloader, eval_dataloader
     
@@ -150,7 +154,7 @@ def create_tbwriter(args, erase=True):
 def train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, eval_tbwriter, optimizer, scheduler):
     model.train()
     dataloader, tbwriter = train_dataloader, train_tbwriter
-    steps_per_epoch = len(dataloader) * 0.1 if args.tiny_experiment else len(dataloader)
+    steps_per_epoch = len(dataloader) * TINY_RATE if args.tiny_experiment else len(dataloader)
     training_logging_steps = int(steps_per_epoch / 10)
     bar = tqdm(enumerate(dataloader), total=len(dataloader))
     for step, data_batch in bar:
@@ -177,7 +181,7 @@ def train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, 
             args.logging(f"{str(bar)}", do_print=False)
             eval_epoch(args, model, eval_dataloader, eval_tbwriter, scheduler)
         
-        if args.tiny_experiment and step > len(dataloader)*0.1:
+        if args.tiny_experiment and step > len(dataloader)*TINY_RATE:
             break
     return
 
@@ -198,7 +202,7 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
             all_pred.append(pred.cpu().numpy())
             all_target.append(target.cpu().numpy())
         
-        if args.tiny_experiment and step > len(dataloader)*0.1:
+        if args.tiny_experiment and step > len(dataloader)*TINY_RATE:
             print(f"text: {text}")
             print(f"target: {target}")
             print(f"loss: {loss}")
@@ -267,12 +271,12 @@ if __name__ == "__main__":
         
     else:
         try:
-            #block_until_cuda_memory_free(required_mem=11000)
             args.logging(f"This experiemnt started at: {time.ctime()}")
             model = create_model(args)
             train_dataloader, eval_dataloader = create_dataloader(args)
             optimizer, scheduler = create_optimizer_and_scheduler(args, model)
             train_tbwriter, eval_tbwriter = create_tbwriter(args)
+            #block_until_cuda_memory_free(required_mem=21000)
             args.logging(f"begin training")
             args.best_state_dict = None
             for epoch in range(args.epoch):
@@ -287,6 +291,9 @@ if __name__ == "__main__":
             elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
                 model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
 
+            get_submission(args, model)
+            args.test = True
+            eval_epoch(args, model, eval_dataloader)
             # TODO test
 
         except Exception as e:
