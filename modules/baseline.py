@@ -18,6 +18,35 @@ Constants = {
     "EOS_WORD": '[SEP]',
 }
 
+class Model(nn.Module):
+    r""" the baseline model
+    """
+    def __init__(self, args):
+        super().__init__()
+        self.bert = AutoModel.from_pretrained(args.pretrained_model_name_or_path)
+        if args.freeze_pretrained:
+            self.freeze_bert()
+        self.aggregator = args.agg_class(
+            input_size = self.bert.config.hidden_size
+        )
+        self.head = args.head_class(args, self.bert.config)
+    
+    def forward(self, input_ids, label, extra_labels=None, padding_mask=None):
+        batch_size, input_len = input_ids.shape
+        if padding_mask is None:
+            padding_mask = input_ids.ne(Constants["PAD"])
+        
+        outputs = self.bert(input_ids)
+        hidden_states = outputs.last_hidden_state
+        #last_hidden_state = outputs.pooler_output
+        aggregation = self.aggregator(hidden_states, padding_mask)
+        loss, prediction = self.head(aggregation, label, extra_labels)
+        return loss, prediction
+    
+    def freeze_bert(self, reverse=False):
+        for name,para in self.bert.named_parameters():
+            para.requires_grad = False if not reverse else True
+
 class Aggregator(nn.Module):
     r""" a static attention layer to aggregate the information from a length-variable sequence.
     """
@@ -50,34 +79,30 @@ class Aggregator(nn.Module):
         
         return aggregation
 
-class Model(nn.Module):
-    r""" the baseline model
-    """
-    def __init__(self, args):
+class DebertaAggregator(nn.Module):
+    r""" "pool" the model by simply taking the hidden state corresponding """
+    def __init__(self, input_size, **kwargs):
         super().__init__()
-        self.bert = AutoModel.from_pretrained(args.pretrained_model_name_or_path)
-        if args.freeze_pretrained:
-            self.freeze_bert()
-        self.aggregator = Aggregator(
-            input_size = self.bert.config.hidden_size
+        self.pooler = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(input_size, input_size),
+            nn.GELU()
         )
-        self.head = args.head_class(args, self.bert.config)
-    
-    def forward(self, input_ids, label, extra_labels=None, padding_mask=None):
-        batch_size, input_len = input_ids.shape
-        if padding_mask is None:
-            padding_mask = input_ids.ne(Constants["PAD"])
-        
-        outputs = self.bert(input_ids)
-        hidden_states = outputs.last_hidden_state
-        #last_hidden_state = outputs.pooler_output
-        aggregation = self.aggregator(hidden_states, padding_mask)
-        loss, prediction = self.head(aggregation, label, extra_labels)
-        return loss, prediction
-    
-    def freeze_bert(self, reverse=False):
-        for name,para in self.bert.named_parameters():
-            para.requires_grad = False if not reverse else True
+    def forward(self, hidden_states, attention_mask):
+        return self.pooler(hidden_states[:, 0])
+
+class DebertaRegressionHead(nn.Module):
+    """ cls -> dropout -> dense -> gelu -> dropout -> dense """
+    def __init__(self, args, bert_config):
+        super().__init__()
+        self.MLP = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(bert_config.hidden_size, 1)
+        )
+    def forward(self, aggregation, label, extra_labels=None):
+        pred = self.MLP(aggregation).squeeze(-1)
+        loss = F.mse_loss(pred, label)
+        return loss, pred
 
 class BasicRegressionHead(nn.Module):
     def __init__(self, args, bert_config):
@@ -147,4 +172,6 @@ def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
             return loss + loss_extra, pred
     return ExtraRegressionHead
             
-available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead, SimCLR_MLP]}
+available_agg_classes = {agg_class.__name__:agg_class for agg_class in [Aggregator, DebertaAggregator]}
+
+available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead, SimCLR_MLP, DebertaRegressionHead]}

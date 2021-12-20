@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from transformers import logging
 logging.set_verbosity_error()
 
-from modules.baseline import available_head_classes
+from modules.baseline import available_head_classes, available_agg_classes
 from data_utils import get_dataloader, get_df, export_result
 
 TINY_RATE = 0.1
@@ -42,6 +42,7 @@ def init_config(args_specification=None):
     
     parser.add_argument('--exp_dir', type=str, default=None)
     parser.add_argument('--freeze_pretrained', action='store_true', default=False, help="freeze the pretrained weights")
+    parser.add_argument('--agg_class', type=str, choices=list(available_agg_classes.keys()), default="Aggregator")
     parser.add_argument('--head_class', type=str, choices=list(available_head_classes.keys()), default="BasicRegressionHead")
     parser.add_argument('--loss_class', type=str, choices=["mse", "ce"], default="mse")
     parser.add_argument('--extra_counts', type=int, default=0, help="number of extra features for joint learning")
@@ -59,6 +60,7 @@ def init_config(args_specification=None):
     torch.backends.cudnn.deterministic = True
     
     args.head_class = available_head_classes[args.head_class]
+    args.agg_class = available_agg_classes[args.agg_class]
     
     args.model_name = f"{args.pretrained_model_name_or_path}_with_{args.head_class.__name__}_{args.loss_class}"
     if args.extra_counts > 0:
@@ -290,8 +292,9 @@ if __name__ == "__main__":
                 model.load_state_dict(args.best_state_dict)
             elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
                 model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
-
-            get_submission(args, model)
+            
+            if not tiny:
+                get_submission(args, model)
             args.test = True
             eval_epoch(args, model, eval_dataloader)
             # TODO test
