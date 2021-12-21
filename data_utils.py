@@ -5,9 +5,6 @@ import pandas as pd
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-MAX_LENGTH = 200
-TRUNCATION_MEDIUM = 128
-
 columns_to_pearsons = [
     ('insult', 0.928228709),
     ('obscene', 0.49313278),
@@ -63,7 +60,7 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
         df = get_df(root, usage)
         extra_columns = [a for a,b in columns_to_pearsons[:extra_counts]]
         dataset = torch.utils.data.TensorDataset(
-            torch.tensor([tokenizer.encode(text, truncation=True, max_length=MAX_LENGTH, padding="max_length")
+            torch.tensor([tokenizer.encode(text, truncation=True, max_length=args.max_length, padding="max_length")
                           for text in tqdm(df["comment_text"])]).long(),
             torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
             torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros([df.shape[0], len(extra_columns)])).float(),

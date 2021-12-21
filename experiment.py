@@ -32,6 +32,7 @@ def init_config(args_specification=None):
     parser.add_argument('--epoch', type=int, default=1)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
     parser.add_argument('--batch_size', type=int, default=32, help="the size of mini-batch in training")
+    parser.add_argument('--max_length', type=int, default=200, help="the max length of text tokenization")
     
     parser.add_argument('--seed', type=int, default=123456, help="random seed")
     parser.add_argument('--opt', type=str, choices=["adamw"], default="adamw", help="optimizer")
