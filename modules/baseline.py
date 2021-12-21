@@ -161,7 +161,7 @@ def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
             self.extra_MLPs = nn.Sequential(
                 nn.Dropout(0.1),
                 nn.Linear(bert_config.hidden_size, extra_counts),
-                nn.Sigmoid()
+                #nn.Sigmoid()
             )
         def forward(self, aggregation, label, extra_labels):
             loss, pred = super(ExtraRegressionHead, self).forward(aggregation, label)

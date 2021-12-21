@@ -198,7 +198,7 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
         text, target, extra = data_batch
         text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
         loss, pred = model(text, target, extra)
-        total_loss += loss
+        total_loss += loss*text.shape[0]
         total_samples += text.shape[0]
         if args.test:
             all_pred.append(pred.cpu().numpy())
@@ -293,8 +293,7 @@ if __name__ == "__main__":
             elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
                 model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
             
-            if not tiny:
-                get_submission(args, model)
+            get_submission(args, model)
             args.test = True
             eval_epoch(args, model, eval_dataloader)
             # TODO test
