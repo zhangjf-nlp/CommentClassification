@@ -194,7 +194,8 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
     
     total_loss, total_samples = 0, 0
     all_pred, all_target = [], []
-    bar = enumerate(dataloader) if not args.test else enumerate(tqdm(dataloader))
+    #bar = enumerate(dataloader) if not args.test else enumerate(tqdm(dataloader))
+    bar = enumerate(tqdm(dataloader))
     for step, data_batch in bar:
         text, target, extra = data_batch
         text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
@@ -240,11 +241,13 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
         args.best_eval_loss = eval_loss
         args.best_state_dict = deepcopy(model.state_dict())
         args.logging(f"update best eval loss to: {eval_loss:.6f}\n")
+    
+    get_submission(args, model, prefix=f"eval-{args.global_step}")
         
     model.train()
 
 @torch.no_grad()
-def get_submission(args, model):
+def get_submission(args, model, prefix=""):
     dataloader = get_dataloader(args, usage="test")
     all_pred = []
     for step, data_batch in enumerate(tqdm(dataloader)):
@@ -255,7 +258,7 @@ def get_submission(args, model):
     all_pred = np.concatenate(all_pred, axis=0)
     df_test = get_df(usage="test")
     submission = "\n".join([f"{a} {b}" for a,b in zip(list(df_test["id"]), list(all_pred))])
-    with open(f"{args.exp_dir}/submission.txt", "w") as f:
+    with open(f"{args.exp_dir}/{prefix}submission.txt", "w") as f:
         f.write(submission)
 
 if __name__ == "__main__":

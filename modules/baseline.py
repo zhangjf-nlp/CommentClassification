@@ -117,6 +117,17 @@ class BasicRegressionHead(nn.Module):
         loss = F.mse_loss(pred, label)
         return loss, pred
 
+class ReluRegressionHead(BasicRegressionHead):
+    def __init__(self, args, bert_config):
+        super().__init__(args, bert_config)
+        self.MLP = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(bert_config.hidden_size, int(bert_config.hidden_size**0.5)),
+            nn.Tanh(),
+            nn.Linear(int(bert_config.hidden_size**0.5), 1),
+            nn.LeakyReLU()
+        )
+
 class TwoLayerRegressionHead(BasicRegressionHead):
     def __init__(self, args, bert_config):
         super().__init__(args, bert_config)
@@ -144,8 +155,8 @@ def extend_with_celoss(BaseHead):
     class CEBaseHead(BaseHead):
         def forward(self, aggregation, label, extra_labels=None):
             loss, pred = super(CEBaseHead, self).forward(aggregation, label)
-            label_ = label*0.8+0.1
-            pred_ = pred*0.8+0.1
+            label_ = label#*0.8+0.1
+            pred_ = pred#*0.8+0.1
             # [0,1] -> [0.1,0.9]
             loss = -torch.sum(label_*torch.log(pred_) + \
                               (1-label_)*torch.log(1-pred_))
@@ -174,4 +185,4 @@ def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
             
 available_agg_classes = {agg_class.__name__:agg_class for agg_class in [Aggregator, DebertaAggregator]}
 
-available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead, SimCLR_MLP, DebertaRegressionHead]}
+available_head_classes = {head_class.__name__:head_class for head_class in [BasicRegressionHead, TwoLayerRegressionHead, SimCLR_MLP, DebertaRegressionHead, ReluRegressionHead]}

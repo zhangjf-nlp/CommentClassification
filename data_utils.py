@@ -51,7 +51,7 @@ def get_df(root="./data/MLHomework_Toxicity", usage="train"):
     return pd.DataFrame(pd.read_csv(f"{root}/{usage}.csv"))
     
 def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
-    dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-(1+{extra_counts}).pt"
+    dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-{args.max_length}-(1+{extra_counts}).pt"
     if os.path.exists(dataset_file_path) and not erase:
         dataset = torch.load(dataset_file_path)
     else:
@@ -77,7 +77,7 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
     return dataloader
 
 def get_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
-    dataloader_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-{args.batch_size}*(1+{extra_counts}).pt"
+    dataloader_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-{args.max_length}-{args.batch_size}*(1+{extra_counts}).pt"
     if os.path.exists(dataloader_file_path) and not erase:
         dataloader = torch.load(dataloader_file_path)
     else:
