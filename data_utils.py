@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
+from torch.utils.data import WeightedRandomSampler, RandomSampler, SequentialSampler
 
 columns_to_pearsons = [
     ('insult', 0.928228709),
@@ -51,7 +52,7 @@ def get_df(root="./data/MLHomework_Toxicity", usage="train"):
     return pd.DataFrame(pd.read_csv(f"{root}/{usage}.csv"))
     
 def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
-    dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-{args.max_length}-(1+{extra_counts}).pt"
+    dataset_file_path = f"{root}/{args.pretrained_model_name_or_path}/{'bias-' if args.bias_sampling else ''}{usage}-{args.max_length}-(1+{extra_counts}).pt"
     if os.path.exists(dataset_file_path) and not erase:
         dataset = torch.load(dataset_file_path)
     else:
@@ -63,21 +64,29 @@ def create_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", to
             torch.tensor([tokenizer.encode(text, truncation=True, max_length=args.max_length, padding="max_length")
                           for text in tqdm(df["comment_text"])]).long(),
             torch.tensor([_ for _ in df["target"]] if usage in ["train","eval"] else np.zeros(df.shape[0])).float(),
-            torch.tensor(get_df(root, "train_extra").loc[list(df['Unnamed: 0'])][extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros([df.shape[0], len(extra_columns)])).float(),
+            torch.tensor(get_df(root, f"{usage}_extra")[extra_columns].to_numpy() if usage in ["train","eval"] else np.zeros([df.shape[0], len(extra_columns)])).float(),
         )
         if not os.path.exists(os.path.dirname(dataset_file_path)):
             os.makedirs(os.path.dirname(dataset_file_path))
         torch.save(dataset, dataset_file_path)
+    
+    if args.bias_sampling and usage in ["train","eval"]:
+        weights = get_df(root, f"{usage}_extra_target_weight")["weight"].to_list()
+        assert len(weights)==len(dataset)
+        sampler = WeightedRandomSampler(weights, len(weights))
+    else:
+        sampler = RandomSampler(dataset) if usage=="train" else SequentialSampler(dataset)
+    
     dataloader = torch.utils.data.DataLoader(
         dataset = dataset,
-        sampler = torch.utils.data.RandomSampler(dataset) if usage=="train" else torch.utils.data.SequentialSampler(dataset),
+        sampler = sampler,
         batch_size = args.batch_size,
         drop_last = True if usage=="train" else False
     )
     return dataloader
 
 def get_dataloader(args, root="./data/MLHomework_Toxicity", usage="train", tokenizer=None, extra_counts=6, erase=False):
-    dataloader_file_path = f"{root}/{args.pretrained_model_name_or_path}/{usage}-{args.max_length}-{args.batch_size}*(1+{extra_counts}).pt"
+    dataloader_file_path = f"{root}/{args.pretrained_model_name_or_path}/{'bias-' if args.bias_sampling else ''}{usage}-{args.max_length}-{args.batch_size}*(1+{extra_counts}).pt"
     if os.path.exists(dataloader_file_path) and not erase:
         dataloader = torch.load(dataloader_file_path)
     else:

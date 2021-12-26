@@ -31,16 +31,18 @@ class Model(nn.Module):
         )
         self.head = args.head_class(args, self.bert.config)
     
-    def forward(self, input_ids, label, extra_labels=None, padding_mask=None):
+    def forward(self, input_ids, label, **kwargs):
         batch_size, input_len = input_ids.shape
-        if padding_mask is None:
+        if "padding_mask" not in kwargs:
             padding_mask = input_ids.ne(Constants["PAD"])
-        
+        else:
+            padding_mask = kwargs["padding_mask"]
+            
         outputs = self.bert(input_ids)
         hidden_states = outputs.last_hidden_state
         #last_hidden_state = outputs.pooler_output
         aggregation = self.aggregator(hidden_states, padding_mask)
-        loss, prediction = self.head(aggregation, label, extra_labels)
+        loss, prediction = self.head(aggregation, label, extra_labels=kwargs["extra_labels"])
         return loss, prediction
     
     def freeze_bert(self, reverse=False):
@@ -99,7 +101,7 @@ class DebertaRegressionHead(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(bert_config.hidden_size, 1)
         )
-    def forward(self, aggregation, label, extra_labels=None):
+    def forward(self, aggregation, label, **kwargs):
         pred = self.MLP(aggregation).squeeze(-1)
         loss = F.mse_loss(pred, label)
         return loss, pred
@@ -112,7 +114,7 @@ class BasicRegressionHead(nn.Module):
             nn.Linear(bert_config.hidden_size, 1),
             nn.Sigmoid()
         )
-    def forward(self, aggregation, label, extra_labels=None):
+    def forward(self, aggregation, label, **kwargs):
         pred = self.MLP(aggregation).squeeze(-1)
         loss = F.mse_loss(pred, label)
         return loss, pred
@@ -152,14 +154,20 @@ class SimCLR_MLP(BasicRegressionHead):
         )
 
 def extend_with_celoss(BaseHead):
+    """
+    q = sigmoid(x) = 1 / (exp(-x) + 1) = 1 / x_
+    ce = plog(q) + (1-p)log(1-q)
+       = p(-log(x_)) + (1-p)(log(exp(-x)) - log(x_))
+       = -plog(x_) + (1-p)(-x - log(x_))
+       = -plog(x_) - x - log(x_) + px + plog(x_)
+       = (p-1)x - log(x_)
+       = (p-1)x - log(exp(-x)+1)
+    """
     class CEBaseHead(BaseHead):
-        def forward(self, aggregation, label, extra_labels=None):
+        def forward(self, aggregation, label, **kwargs):
             loss, pred = super(CEBaseHead, self).forward(aggregation, label)
-            label_ = label#*0.8+0.1
-            pred_ = pred#*0.8+0.1
-            # [0,1] -> [0.1,0.9]
-            loss = -torch.sum(label_*torch.log(pred_) + \
-                              (1-label_)*torch.log(1-pred_))
+            loss = -torch.mean(label*torch.log(pred) + \
+                              (1-label)*torch.log(1-pred))
             return loss, pred
     return CEBaseHead
 
@@ -174,12 +182,12 @@ def extend_with_extra_regressions(BaseHead, extra_counts, extra_weights):
                 nn.Linear(bert_config.hidden_size, extra_counts),
                 #nn.Sigmoid()
             )
-        def forward(self, aggregation, label, extra_labels):
+        def forward(self, aggregation, label, **kwargs):
             loss, pred = super(ExtraRegressionHead, self).forward(aggregation, label)
             if self.extra_counts == -1:
                 # transform from multi-task fine-tuning to single-task fine-tuning
                 return loss, pred
-            loss_extra = torch.sum(F.mse_loss(self.extra_MLPs(aggregation), extra_labels) * self.extra_weights)
+            loss_extra = torch.sum(F.mse_loss(self.extra_MLPs(aggregation), kwargs["extra_labels"]) * self.extra_weights)
             return loss + loss_extra, pred
     return ExtraRegressionHead
             

@@ -26,6 +26,7 @@ def init_config(args_specification=None):
     parser = argparse.ArgumentParser(description="Comment Classification study")
     
     parser.add_argument('--test', action='store_true', default=False)
+    parser.add_argument('--bias_sampling', action='store_true', default=False, help="use Bias-AUC oriented sampling strategy")
     parser.add_argument('--tiny_experiment', action='store_true', default=False, help="only use a tiny subset to train/eval/test")
     parser.add_argument('--pretrained_model_name_or_path', type=str, default='bert-base-uncased', help="the specified path to load pretrained vae")
     
@@ -48,12 +49,29 @@ def init_config(args_specification=None):
     parser.add_argument('--loss_class', type=str, choices=["mse", "ce"], default="mse")
     parser.add_argument('--extra_counts', type=int, default=0, help="number of extra features for joint learning")
     
-    if args_specification:
+    if args_specification and type(args_specification) is str:
+        args = torch.load(args_specification)
+        save_args = False
+    elif args_specification and type(args_specification) is list:
         args = parser.parse_args([_ for _ in args_specification if _])
+        save_args = True
     else:
         args = parser.parse_args()
+        save_args = True
     
     assert torch.cuda.is_available(), f"this project only supports gpu at the moment while torch.cuda.is_available() is False"
+    
+    args.model_name = f"{args.pretrained_model_name_or_path}_{args.agg_class}_{args.head_class}_{args.loss_class}"
+    if args.extra_counts > 0:
+        args.model_name += f"+{args.extra_counts}"
+    if args.bias_sampling:
+        args.model_name += f"_bias"
+    
+    if args.exp_dir == None:
+        args.exp_dir = f"exp/{args.model_name}"
+    
+    if save_args:
+        torch.save(args, f"{args.exp_dir}/args.pt")
     
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -62,13 +80,6 @@ def init_config(args_specification=None):
     
     args.head_class = available_head_classes[args.head_class]
     args.agg_class = available_agg_classes[args.agg_class]
-    
-    args.model_name = f"{args.pretrained_model_name_or_path}_with_{args.head_class.__name__}_{args.loss_class}"
-    if args.extra_counts > 0:
-        args.model_name += f"+{args.extra_counts}"
-    
-    if args.exp_dir == None:
-        args.exp_dir = f"exp/{args.model_name}"
     
     args.logging = create_logging(args, erase=True)
     args.logging(args)
@@ -136,9 +147,11 @@ def create_optimizer_and_scheduler(args, model):
     
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     if args.scheduler_style == "dynamic":
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.8, patience=1)
-    else:
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+    elif args.scheduler_style == "static":
         scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=args.train_steps)
+    elif args.scheduler_style == "cyclic":
+        scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps/2, num_training_steps=args.train_steps, num_cycles=9.5)
     
     args.best_eval_loss = 1e10
     return optimizer, scheduler
@@ -163,7 +176,7 @@ def train_epoch(args, model, train_dataloader, eval_dataloader, train_tbwriter, 
     for step, data_batch in bar:
         text, target, extra = data_batch
         text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
-        loss, pred = model(text, target, extra)
+        loss, pred = model(text, target, extra_labels=extra)
         bar.set_description(f"loss={loss.item():.2f}")
         for name, value in [
             ("loss", loss.item()),
@@ -199,7 +212,7 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
     for step, data_batch in bar:
         text, target, extra = data_batch
         text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
-        loss, pred = model(text, target, extra)
+        loss, pred = model(text, target, extra_labels=extra)
         total_loss += loss*text.shape[0]
         total_samples += text.shape[0]
         if args.test:
@@ -243,6 +256,7 @@ def eval_epoch(args, model, dataloader, tbwriter=None, scheduler=None):
         args.logging(f"update best eval loss to: {eval_loss:.6f}\n")
     
     get_submission(args, model, prefix=f"eval-{args.global_step}")
+    torch.save(model.state_dict(), f"{args.exp_dir}/eval-{args.global_step}-chkpts.pt")
         
     model.train()
 
@@ -253,13 +267,21 @@ def get_submission(args, model, prefix=""):
     for step, data_batch in enumerate(tqdm(dataloader)):
         text, target, extra = data_batch
         text, target, extra = text.cuda(), target.cuda(), extra.cuda().float()
-        loss, pred = model(text, target, extra)
+        loss, pred = model(text, target, extra_labels=extra)
         all_pred.append(pred.cpu().numpy())
     all_pred = np.concatenate(all_pred, axis=0)
     df_test = get_df(usage="test")
-    submission = "\n".join([f"{a} {b}" for a,b in zip(list(df_test["id"]), list(all_pred))])
+    lines = [f"{a} {b}" for a,b in zip(list(df_test["id"]), list(all_pred))]
     with open(f"{args.exp_dir}/{prefix}submission.txt", "w") as f:
-        f.write(submission)
+        f.write("\n".join(lines))
+    """
+    try:
+        from data.MLHomeworks_client.client import main
+        score = main(ans=lines, verbose=0)
+        print(score)
+    except Exception as e:
+        import traceback
+        print(f'traceback.format_exc():\n{traceback.format_exc()}')"""
 
 if __name__ == "__main__":
     
@@ -292,15 +314,10 @@ if __name__ == "__main__":
             args.logging(f"finish training: best_loss = {args.best_eval_loss}\n")
 
             if args.best_state_dict is not None:
-                torch.save(args.best_state_dict, f"{args.exp_dir}/chkpts.pt")
+                torch.save(args.best_state_dict, f"{args.exp_dir}/best_chkpts.pt")
                 model.load_state_dict(args.best_state_dict)
-            elif os.path.exists(f"{args.exp_dir}/chkpts/{args.stage}.pt"):
-                model.load_state_dict(torch.load(f"{args.exp_dir}/chkpts.pt"))
-            
-            get_submission(args, model)
-            args.test = True
-            eval_epoch(args, model, eval_dataloader)
-            # TODO test
+            elif os.path.exists(f"{args.exp_dir}/best_chkpts.pt"):
+                model.load_state_dict(torch.load(f"{args.exp_dir}/best_chkpts.pt"))
 
         except Exception as e:
             import traceback
