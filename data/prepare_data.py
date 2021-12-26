@@ -69,6 +69,16 @@ def subgroup_analysis(answers_extra, subgroup, intervals=1000, label_col='target
         answers_extra.loc[indexer, 'weight'] += importance / num_cases # the sampling probability
     return
 
+def download_file_from_google_drive(id, destination):
+    URL = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+    response = session.get(URL, params = { 'id' : id }, stream = True)
+    token = get_confirm_token(response)
+    if token:
+        params = { 'id' : id, 'confirm' : token }
+        response = session.get(URL, params = params, stream = True)
+    save_response_content(response, destination)
+
 if __name__ == "__main__":
     if not os.path.exists("MLHomework_Toxicity/eval_extra_target_weight.csv"):
         if not os.path.exists("MLHomework_Toxicity/split_result.json"):
@@ -77,7 +87,9 @@ if __name__ == "__main__":
                     os.system("rm -rf MLHomework_Toxicity")
                 if not os.path.exists("MLHomework_Toxicity.zip"):
                     print("Stage.1 Downloading MLHomework_Toxicity.zip ...")
-                    os.system("wget https://drive.google.com/file/d/1nhh2G8pMLxqMxxHK2yzX_0lH-24pNAqp/view?usp=sharing")
+                    download_file_from_google_drive(
+                        id="1nhh2G8pMLxqMxxHK2yzX_0lH-24pNAqp",
+                        destination="./MLHomework_Toxicity.zip")
                 
                 print("Stage.2 Unziping MLHomework_Toxicity.zip ...")
                 os.system("unzip MLHomework_Toxicity.zip")
