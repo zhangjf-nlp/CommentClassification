@@ -28,7 +28,7 @@ def init_config(args_specification=None):
     parser.add_argument('--test', action='store_true', default=False)
     parser.add_argument('--bias_sampling', action='store_true', default=False, help="use Bias-AUC oriented sampling strategy")
     parser.add_argument('--tiny_experiment', action='store_true', default=False, help="only use a tiny subset to train/eval/test")
-    parser.add_argument('--pretrained_model_name_or_path', type=str, default='bert-base-uncased', help="the specified path to load pretrained vae")
+    parser.add_argument('--pretrained_model_name_or_path', type=str, default='bert-base-uncased', help="the specified path to load pretrained LM")
     
     parser.add_argument('--epoch', type=int, default=1)
     parser.add_argument('--learning_rate', type=float, default=1e-5)
